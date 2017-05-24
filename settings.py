@@ -43,6 +43,9 @@ MIN_VOTER_AGE = 1 * 30 * 24 * 60 * 60  # 1 month
 # the project by requiring some basic consensus.
 MIN_VOTE_WATCHERS = 0.01
 
+# we need more chaos
+IMMEDIATE_MERGE_THRESHOLD = 10
+
 # unauthenticated api requests get 60 requests/hr, so we need to get as much
 # data from each request as we can.  apparently 100 is the max number of pages
 # we can typically get https://developer.github.com/v3/#pagination

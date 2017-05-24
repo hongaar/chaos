@@ -39,6 +39,9 @@ def poll_pull_requests():
         # is our PR in voting window?
         in_window = gh.prs.is_pr_in_voting_window(pr, voting_window)
 
+        if vote_total > settings.IMMEDIATE_MERGE_THRESHOLD:
+            is_approved = in_window = True
+
         if is_approved:
             __log.info("PR %d status: will be approved", pr_num)
 
