@@ -1,11 +1,11 @@
 import math
-
 import arrow
 from requests import HTTPError
 
 import settings
 from . import comments
 from . import exceptions as exc
+from . import issues
 from . import misc
 from . import voting
 
@@ -103,15 +103,6 @@ meritocracy: {meritocracy}
                        meritocracy=meritocracy_str)
 
 
-def label_pr(api, urn, pr_num, labels):
-    """ set a pr's labels (removes old labels) """
-    if not isinstance(labels, (tuple, list)):
-        labels = [labels]
-    path = "/repos/{urn}/issues/{pr}/labels".format(urn=urn, pr=pr_num)
-    data = labels
-    return api("PUT", path, json=data)
-
-
 def close_pr(api, urn, pr):
     """ https://developer.github.com/v3/pulls/#update-a-pull-request """
     path = "/repos/{urn}/pulls/{pr}".format(urn=urn, pr=pr["number"])
@@ -200,10 +191,10 @@ def get_ready_prs(api, urn, window):
         mergeable = get_is_mergeable(api, urn, pr_num)
 
         if mergeable is True:
-            label_pr(api, urn, pr_num, [])
+            issues.unlabel_issue(api, urn, pr_num, ["conflicts"])
             yield pr
         elif mergeable is False:
-            label_pr(api, urn, pr_num, ["conflicts"])
+            issues.label_issue(api, urn, pr_num, ["conflicts"])
             if delta >= 60 * 60 * settings.PR_STALE_HOURS:
                 comments.leave_stale_comment(
                     api, urn, pr["number"], round(delta / 60 / 60))
