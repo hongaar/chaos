@@ -1,5 +1,4 @@
 import logging
-import arrow
 import json
 import os
 import re
@@ -26,7 +25,7 @@ if not os.path.exists(SAVED_COMMANDS_FILE):
     with open(SAVED_COMMANDS_FILE, 'w') as f:
         json.dump({}, f)
 
-__log = logging.getLogger("poll_issue_commands")
+__log = logging.getLogger("issue_commands")
 
 '''
 Command Syntax
@@ -83,8 +82,7 @@ def set_time_remaining(api, comment_id, comment_txt):
     if comment_data["has_ran"]:
         return
 
-    now = arrow.utcnow()
-    voting_window = gh.voting.get_initial_voting_window(now)
+    voting_window = gh.voting.get_initial_voting_window()
 
     seconds_remaining = gh.issues.voting_window_remaining_seconds(api, settings.URN, comment_id,
                                                                   voting_window)
@@ -230,12 +228,11 @@ def handle_comment(api, issue_comment):
         __log.debug("comment: {comment} is not a command, " +
                     "parsed: {parsed}".format(comment=comment_text, parsed=orig_parsed))
 
-        
+
 def poll_read_issue_comments(api):
     __log.info("looking for issue comments")
 
     issue_comments = gh.comments.get_all_issue_comments(api, settings.URN)
-    __log.info("found {count} issue comments".format(count=len(issue_comments)))
 
     for issue_comment in issue_comments:
         handle_comment(api, issue_comment)
