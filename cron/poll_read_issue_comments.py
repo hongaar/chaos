@@ -1,4 +1,5 @@
 import logging
+import arrow
 import json
 import os
 import re
@@ -15,17 +16,20 @@ if not os.path.exists(SAVED_COMMANDS_FILE):
         "comment_id": [ // the actual id
             {
                 "comment_id" : int,
+                "issue_id": int,
                 "has_ran" : bool,
                 "command": string
                 "chaos_response_id" : int, // chaos status comment id
                 "time_remaining": int
             }
+
+        "last_ran": "2017-05-20T00:00:00Z" //format
         ]
     '''
     with open(SAVED_COMMANDS_FILE, 'w') as f:
         json.dump({}, f)
 
-__log = logging.getLogger("issue_commands")
+__log = logging.getLogger("poll_issue_commands")
 
 '''
 Command Syntax
@@ -37,7 +41,10 @@ Command Syntax
 /vote unassign=<USER> unassigns from user when ^^^
 '''
 
-COMMAND_LIST = ["/vote"]
+# If no subcommands, map cmd: None
+COMMAND_LIST = {
+        "/vote": ("close", "reopen")
+    }
 
 
 def update_db(comment_id, data_fields, db=None):
@@ -46,32 +53,57 @@ def update_db(comment_id, data_fields, db=None):
         with open(SAVED_COMMANDS_FILE, 'r') as f:
             db = json.load(f)
 
+    if comment_id not in db:
+        db[comment_id] = {}
+
     for field, value in data_fields.items():
         db[comment_id][field] = value
 
     with open(SAVED_COMMANDS_FILE, 'w') as f:
         json.dump(db, f)
 
-
-def select_db(comment_id, fields):
-    with open(SAVED_COMMANDS_FILE, 'r') as f:
-        db = json.load(f)
-        data = {}
-        for field in fields:
-            data[field] = db[comment_id][field]
-        return data
+    return db
 
 
-def set_time_remaining(api, comment_id, comment_txt):
+def select_db(comment_id, fields, db=None):
+    if db is None:
+        with open(SAVED_COMMANDS_FILE, 'r') as f:
+            db = json.load(f)
+    data = {}
+    for field in fields:
+        data[field] = db[comment_id][field]
+    return data
+
+
+def get_last_ran(db=None):
+    if db is None:
+        with open(SAVED_COMMANDS_FILE, 'r') as f:
+            db = json.load(f)
+    return db.get("last_ran", None)  # First time return none
+
+
+def set_last_run(last_ran, db=None):
+    if db is None:
+        with open(SAVED_COMMANDS_FILE, 'r') as f:
+            db = json.load(f)
+
+    db["last_ran"] = last_ran
+    with open(SAVED_COMMANDS_FILE, 'w') as f:
+        json.dump(db, f)
+
+
+def insert_or_update(api, comment_id, issue_id, comment_txt):
     command_history = {}
     with open(SAVED_COMMANDS_FILE, 'r') as f:
         command_history = json.load(f)
 
+    # equivalent of db INSERT OR UPDATE.
     comment_data = command_history.get(comment_id, None)
 
     if not comment_data:
         comment_data = {
             "comment_id": comment_id,
+            "issue_id": issue_id,
             "has_ran": False,
             # "command": comment_txt,
             "chaos_response_id": None,
@@ -86,7 +118,7 @@ def set_time_remaining(api, comment_id, comment_txt):
 
     seconds_remaining = gh.issues.voting_window_remaining_seconds(api, settings.URN, comment_id,
                                                                   voting_window)
-
+    seconds_remaining = max(0, seconds_remaining)  # No negative time
     data = {
         "time_remaining": seconds_remaining,
         "command": comment_txt  # Keep this fresh so nobody edits their command post..
@@ -98,7 +130,7 @@ def has_enough_votes(votes):
     # At least one negative vote will cause vote to not pass
     for user, vote in votes.items():
         if vote < 0:
-            __log.debug("vote less than one")
+            # __log.debug("vote less than one")
             return False
 
     return True
@@ -134,29 +166,28 @@ def post_command_status_update(api, issue_id, comment_id, has_votes):
         update_db(comment_id, {"chaos_response_id": str(resp["id"])}, db=command_history)
 
 
-def can_run_vote_command(api, votes, comment_id):
-    json_data = {}
-    with open(SAVED_COMMANDS_FILE, 'r') as f:
-        json_data = json.load(f)
-
-    comment_data = json_data[comment_id]
+def can_run_vote_command(api, comment_id):
+    comment_data = select_db(comment_id, ("has_ran", "time_remaining"))
 
     if comment_data["has_ran"]:
-        __log.debug("Already ran command")
+        # __log.debug("Already ran command")
         return False
 
     time_left = comment_data["time_remaining"]
     if time_left > 0:
-        __log.debug("Time remaining: " + gh.misc.seconds_to_human(time_left))
+        # __log.debug("Time remaining: " + gh.misc.seconds_to_human(time_left))
         return False
 
     return True
 
 
-def update_command_ran(api, comment_id):
-    update_db(comment_id, {"has_ran": True})
-    body = "Command has been run"
-    gh.comments.edit_comment(api, settings.URN, comment_id, body)
+def update_command_ran(api, comment_id, text):
+    db = update_db(comment_id, {"has_ran": True})
+    db_fields = select_db(comment_id, ("chaos_response_id", "command"), db=db)
+    resp_id = db_fields["chaos_response_id"]
+    command = db_fields["command"]
+    body = "> {command}\n\n{text}".format(command=command, text=text)
+    gh.comments.edit_comment(api, settings.URN, resp_id, body)
 
 
 def get_command_votes(api, urn, comment_id):
@@ -175,11 +206,9 @@ def handle_vote_command(api, command, issue_id, comment_id, votes):
         if sub_command == "close":
             gh.issues.close_issue(api, settings.URN, issue_id)
             gh.comments.leave_issue_closed_comment(api, settings.URN, issue_id)
-            update_command_ran(api, comment_id)
         elif sub_command == "reopen":
             gh.issues.open_issue(api, settings.URN, issue_id)
             gh.comments.leave_issue_reopened_comment(api, settings.URN, issue_id)
-            update_command_ran(api, comment_id)
         else:
             # Implement other commands
             pass
@@ -197,45 +226,119 @@ def handle_comment(api, issue_comment):
 
     comment_text = re.sub('\s+', ' ', comment_text)
     parsed_comment = list(map(lambda x: x.lower(), comment_text.split(' ')))
-    orig_parsed = parsed_comment[:]
     command = parsed_comment.pop(0)
+
     if command in COMMAND_LIST:
-        __log.debug("Got command: {command}, parsed: {parsed}".format(command=comment_text,
-                                                                      parsed=orig_parsed))
         votes = get_command_votes(api, settings.URN, global_comment_id)
-        set_time_remaining(api, global_comment_id, comment_text)
-        can_run = can_run_vote_command(api, votes, global_comment_id)
+        insert_or_update(api, global_comment_id, issue_id, comment_text)
+        can_run = can_run_vote_command(api, global_comment_id)
         has_votes = has_enough_votes(votes)
         post_command_status_update(api, issue_id, global_comment_id, has_votes)
 
         # We doin stuff boyz
         if can_run and has_votes:
-            __log.debug("Handling issue {issue}: comment {comment}".format(issue=issue_id,
+            __log.debug("Handling issue {issue}: command {comment}".format(issue=issue_id,
                                                                            comment=comment_text))
 
             if command == "/vote":
-                handle_vote_command(api, parsed_comment, issue_id,
-                                    global_comment_id, votes)
+                handle_vote_command(api, parsed_comment, issue_id, global_comment_id, votes)
+
+            update_command_ran(api, global_comment_id, "Command Ran")
+
         elif can_run and not has_votes:
             # oops we didn't pass
-            update_db(global_comment_id, {"has_run": True})
-            db_fields = select_db(global_comment_id, ("chaos_response_id", "command"))
-            resp_id = db_fields["chaos_response_id"]
-            command = db_fields["command"]
-            body = "> {command}\n\nVote failed".format(command=command)
-            gh.comments.edit_comment(api, settings.URN, resp_id, body)
-    else:
-        __log.debug("comment: {comment} is not a command, " +
-                    "parsed: {parsed}".format(comment=comment_text, parsed=orig_parsed))
+            update_command_ran(api, global_comment_id, "Vote Failed")
+
+
+def is_command(comment):
+    comment = re.sub('\s+', ' ', comment)
+    parsed_comment = list(map(lambda x: x.lower(), comment.split(' ')))
+    cmd = parsed_comment[0]
+    is_cmd = False
+
+    if cmd in COMMAND_LIST:
+        subcommands = COMMAND_LIST.get(cmd, None)
+
+        # 4 cases
+        # 1. No subcommands for command
+        # 2. Subcommands exist, and args has it
+        # 3. Subcommands exist, and args don't have it
+        # 4. Args specify non existant subcommand
+        if subcommands is None:
+            is_cmd = True  # Already have the command
+        else:
+            sub_cmd_with_args = parsed_comment[1:]
+
+            if len(sub_cmd_with_args) > 0:
+                sub_cmd = sub_cmd_with_args[0]
+
+                # Check cond 2
+                if sub_cmd in subcommands:
+                    is_cmd = True
+                else:
+                    is_cmd = False
+            else:
+                # Cond 3
+                is_cmd = False
+
+    return is_cmd
 
 
 def poll_read_issue_comments(api):
     __log.info("looking for issue comments")
 
-    issue_comments = gh.comments.get_all_issue_comments(api, settings.URN)
+    last_ran = get_last_ran()
+    if last_ran:
+        last_ran = arrow.get(last_ran)
 
-    for issue_comment in issue_comments:
-        handle_comment(api, issue_comment)
+    paged_results = gh.comments.get_all_issue_comments(api,
+                                                       settings.URN,
+                                                       page='all',
+                                                       since=last_ran)
+
+    # This now only finds new entries that have been either posted or updated
+    # Add them to our database
+    # If page=all, you have to loop through pages as well
+    for page in paged_results:
+        for issue_comment in page:
+            # Get info and store in db
+            issue_id = issue_comment["issue_id"]
+            global_comment_id = str(issue_comment["global_comment_id"])
+            comment_text = issue_comment["comment_text"]
+            if is_command(comment_text):
+                insert_or_update(api, global_comment_id, issue_id, comment_text)
+
+    # WARNING - be careful of saving wrong version of db to disk
+    db = None
+    with open(SAVED_COMMANDS_FILE, 'r') as f:
+        db = json.load(f)
+
+    # NEVER delete a comment_id data structure, even if it already ran
+    # Simply updating the command comment will cause it to reenter the system
+    # whic could cause unexpected behaviour
+    # One solution is to delete the original comment with the command..
+    # Or move id to a separate db
+    if "last_ran" in db:
+        del db["last_ran"]
+
+    # TODO - run commands oldest to newest
+
+    db_sorted = sorted(db.items(), key=lambda x: x[1]["time_remaining"])
+    for cmd_id, cmd_obj in db_sorted:
+
+        try:
+            # I'm really lazy right now. Just mock up an object and pass to handle_comment
+            mock = {
+                "issue_id": cmd_obj["issue_id"],
+                "global_comment_id": cmd_obj["comment_id"],
+                "comment_text": cmd_obj["command"]
+            }
+            handle_comment(api, mock)
+        except KeyError as e:
+            __log.warning("Unable to handle comment id {id}".format(cmd_id))
+
+    now = arrow.utcnow()
+    set_last_run(gh.misc.dt_to_github_dt(now))
 
     __log.info("Waiting %d seconds until next scheduled Issue comment polling",
                settings.ISSUE_COMMENT_POLLING_INTERVAL_SECONDS)

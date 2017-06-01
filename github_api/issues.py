@@ -18,10 +18,14 @@ def open_issue(api, urn, issue_id):
     return resp
 
 
-def get_open_issues(api, urn):
+def get_oldest_open_issues(api, urn):
     path = "/repos/{urn}/issues".format(urn=urn)
-    data = {"state": "open"}
-    resp = api("get", path, json=data)
+    data = {
+            "state": "open",
+            "sort": "updated",
+            "direction": "asc",
+            }
+    resp = api("get", path, params=data)
     return resp
 
 
