@@ -14,7 +14,8 @@ class Sqlite(interface.AbstractAdapter):
         self.conn = None  # type: Connection
 
     def connect(self):
-        self.conn = sqlite3.connect(self.filename)
+        self.conn = sqlite3.connect(database=self.filename)
+        self.conn.row_factory = sqlite3.Row
 
     def disconnect(self):
         self.conn.close()
