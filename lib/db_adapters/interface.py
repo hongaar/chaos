@@ -27,6 +27,3 @@ class AbstractAdapter(object, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def one(self, query, params=()):
         raise NotImplementedError()
-
-
-
