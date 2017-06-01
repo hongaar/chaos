@@ -101,3 +101,10 @@ DB_ADAPTER = "sqlite"
 DB_CONFIG = {
     "filename": "db.sqlite"
 }
+# MySQL example
+# DB_CONFIG = {
+#     "host ": "localhost",
+#     "user ": "chaos",
+#     "password ": "chaos",
+#     "db ": "db"
+# }
